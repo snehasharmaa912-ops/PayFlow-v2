@@ -15,6 +15,8 @@ type Charge struct {
 	CustomerID     string    `json:"customer_id"`
 	IdempotencyKey string    `json:"idempotency_key"`
 	Status         string    `json:"status"`
+	RiskDecision   string    `json:"risk_decision,omitempty"`
+	RiskReason     string    `json:"risk_reason,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
