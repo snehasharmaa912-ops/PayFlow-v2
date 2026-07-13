@@ -35,8 +35,13 @@ func main() {
 
 	api := payflow.NewAPI(store).WithLogPath(logPath)
 
-	log.Printf("payflow listening on :8080 (event log: %s)", logPath)
-	if err := http.ListenAndServe(":8080", api.Routes()); err != nil {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("payflow listening on :%s (event log: %s)", port, logPath)
+	if err := http.ListenAndServe(":"+port, api.Routes()); err != nil {
 		log.Fatal(err)
 	}
 }
