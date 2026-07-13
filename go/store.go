@@ -1,6 +1,7 @@
 package payflow
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ type Store struct {
 	byIdempotencyKey map[string]*Charge
 	ledger           *Ledger
 	eventLog         *EventLog
+	riskEvaluator    RiskEvaluator
 }
 
 func NewStore() *Store {
@@ -33,6 +35,10 @@ func (s *Store) SetEventLog(eventLog *EventLog) {
 	s.eventLog = eventLog
 }
 
+func (s *Store) SetRiskEvaluator(evaluator RiskEvaluator) {
+	s.riskEvaluator = evaluator
+}
+
 func (s *Store) Ledger() *Ledger {
 	return s.ledger
 }
@@ -40,12 +46,6 @@ func (s *Store) Ledger() *Ledger {
 func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created bool, err error) {
 	if verr := validateCreateChargeRequest(req); verr != nil {
 		return nil, false, verr
-	}
-
-	s.mu.Lock()
-	if existing, ok := s.byIdempotencyKey[req.IdempotencyKey]; ok {
-		s.mu.Unlock()
-		return existing, false, nil
 	}
 
 	charge = &Charge{
@@ -56,6 +56,23 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
 		Status:         "succeeded",
 		CreatedAt:      time.Now().UTC(),
+	}
+
+	if charge.Amount > LargeChargeThreshold && s.riskEvaluator != nil {
+		decision, reason, evalErr := s.riskEvaluator.Evaluate(charge)
+		if evalErr != nil {
+			decision = "review"
+			reason = "risk engine unavailable: " + evalErr.Error()
+		}
+		charge.RiskDecision = decision
+		charge.RiskReason = reason
+		charge.Status = statusForDecision(decision)
+	}
+
+	s.mu.Lock()
+	if existing, ok := s.byIdempotencyKey[req.IdempotencyKey]; ok {
+		s.mu.Unlock()
+		return existing, false, nil
 	}
 
 	if s.eventLog != nil {
@@ -69,7 +86,9 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 	s.byIdempotencyKey[charge.IdempotencyKey] = charge
 	s.mu.Unlock()
 
-	s.ledger.RecordCharge(charge)
+	if charge.Status != "declined" {
+		s.ledger.RecordCharge(charge)
+	}
 
 	return charge, true, nil
 }
@@ -80,9 +99,10 @@ func (s *Store) applyChargeCreated(charge *Charge) {
 	s.byIdempotencyKey[charge.IdempotencyKey] = charge
 	s.mu.Unlock()
 
-	s.ledger.RecordCharge(charge)
-  }
-
+	if charge.Status != "declined" {
+		s.ledger.RecordCharge(charge)
+	}
+}
 
 func (s *Store) GetCharge(id string) (*Charge, bool) {
 	s.mu.RLock()
