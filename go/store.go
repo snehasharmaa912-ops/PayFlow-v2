@@ -42,12 +42,11 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 		return nil, false, verr
 	}
 
-	s.mu.RLock()
+	s.mu.Lock()
 	if existing, ok := s.byIdempotencyKey[req.IdempotencyKey]; ok {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return existing, false, nil
 	}
-	s.mu.RUnlock()
 
 	charge = &Charge{
 		ID:             newChargeID(),
@@ -61,11 +60,16 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 
 	if s.eventLog != nil {
 		if err := s.eventLog.Append(Event{Type: EventChargeCreated, Charge: charge}); err != nil {
+			s.mu.Unlock()
 			return nil, false, fmt.Errorf("writing to event log: %w", err)
 		}
 	}
 
-	s.applyChargeCreated(charge)
+	s.charges[charge.ID] = charge
+	s.byIdempotencyKey[charge.IdempotencyKey] = charge
+	s.mu.Unlock()
+
+	s.ledger.RecordCharge(charge)
 
 	return charge, true, nil
 }
