@@ -8,6 +8,12 @@ import (
 
 type API struct {
 	store *Store
+	logPath string
+}
+
+func (a *API) WithLogPath(path string) *API {
+	a.logPath = path
+	return a
 }
 
 func NewAPI(store *Store) *API {
@@ -21,6 +27,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("GET /charges/{id}", a.handleGetCharge)
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /ledger", a.handleLedger)
+	mux.HandleFunc("GET /debug/verify-replay", a.handleVerifyReplay)
 	return mux
 }
 
@@ -63,6 +70,34 @@ func (a *API) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, charge)
+}
+
+func (a *API) handleVerifyReplay(w http.ResponseWriter, r *http.Request) {
+	if a.logPath == "" {
+		writeError(w, http.StatusNotImplemented, "no event log configured for this server")
+		return
+	}
+
+	replayed, err := ReplayFromLog(a.logPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "replay failed: "+err.Error())
+		return
+	}
+
+	liveOK, liveSum := a.store.Ledger().Verify()
+	replayOK, replaySum := replayed.Ledger().Verify()
+	matches := reflect.DeepEqual(a.store.Ledger().Balances(), replayed.Ledger().Balances()) &&
+		len(a.store.ListCharges()) == len(replayed.ListCharges())
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"matches":             matches,
+		"live_balanced":       liveOK,
+		"live_sum":            liveSum,
+		"replay_balanced":     replayOK,
+		"replay_sum":          replaySum,
+		"live_charge_count":   len(a.store.ListCharges()),
+		"replay_charge_count": len(replayed.ListCharges()),
+	})
 }
 
 func (a *API) handleGetCharge(w http.ResponseWriter, r *http.Request) {
