@@ -20,7 +20,24 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("GET /charges", a.handleListCharges)
 	mux.HandleFunc("GET /charges/{id}", a.handleGetCharge)
 	mux.HandleFunc("GET /healthz", a.handleHealth)
+	mux.HandleFunc("GET /ledger", a.handleLedger)
 	return mux
+}
+
+type ledgerResponse struct {
+	Balances map[string]int64 `json:"balances"`
+	Balanced bool              `json:"balanced"`
+	Sum      int64             `json:"sum"`
+}
+
+func (a *API) handleLedger(w http.ResponseWriter, r *http.Request) {
+	ledger := a.store.Ledger()
+	balanced, sum := ledger.Verify()
+	writeJSON(w, http.StatusOK, ledgerResponse{
+		Balances: ledger.Balances(),
+		Balanced: balanced,
+		Sum:      sum,
+	})
 }
 
 func (a *API) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
