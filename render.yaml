@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: payflow-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: PAYFLOW_LOG_PATH
+        value: /app/payflow.log
