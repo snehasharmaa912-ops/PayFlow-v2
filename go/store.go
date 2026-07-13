@@ -11,13 +11,19 @@ type Store struct {
 	mu               sync.RWMutex
 	charges          map[string]*Charge
 	byIdempotencyKey map[string]*Charge
+	ledger           *Ledger
 }
 
 func NewStore() *Store {
 	return &Store{
 		charges:          make(map[string]*Charge),
 		byIdempotencyKey: make(map[string]*Charge),
+		ledger:           NewLedger(),
 	}
+}
+
+func (s *Store) Ledger() *Ledger {
+	return s.ledger
 }
 
 func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created bool, err error) {
@@ -46,6 +52,7 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 	s.charges[charge.ID] = charge
 	s.byIdempotencyKey[charge.IdempotencyKey] = charge
 	s.mu.Unlock()
+	s.ledger.RecordCharge(charge)
 
 	return charge, true, nil
 }
