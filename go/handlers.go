@@ -5,15 +5,34 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 )
 
 type API struct {
-	store *Store
-	logPath string
+	store     *Store
+	logPath   string
+	auth      *APIKeyAuth
+	limiter   *RateLimiter
+	webhooks  *WebhookDispatcher
 }
 
 func (a *API) WithLogPath(path string) *API {
 	a.logPath = path
+	return a
+}
+
+func (a *API) WithAuth(auth *APIKeyAuth) *API {
+	a.auth = auth
+	return a
+}
+
+func (a *API) WithRateLimiter(limiter *RateLimiter) *API {
+	a.limiter = limiter
+	return a
+}
+
+func (a *API) WithWebhooks(webhooks *WebhookDispatcher) *API {
+	a.webhooks = webhooks
 	return a
 }
 
@@ -29,7 +48,15 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /ledger", a.handleLedger)
 	mux.HandleFunc("GET /debug/verify-replay", a.handleVerifyReplay)
-	return mux
+
+	var handler http.Handler = mux
+	if a.auth != nil {
+		handler = a.auth.Middleware(handler)
+	}
+	if a.limiter != nil {
+		handler = a.limiter.Middleware(handler)
+	}
+	return handler
 }
 
 type ledgerResponse struct {
@@ -55,6 +82,10 @@ func (a *API) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if headerKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); headerKey != "" {
+		req.IdempotencyKey = headerKey
+	}
+
 	charge, created, err := a.store.CreateCharge(req)
 	if err != nil {
 		var verr *ValidationError
@@ -64,6 +95,14 @@ func (a *API) handleCreateCharge(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+
+	if created && a.webhooks != nil {
+		eventType := "charge.succeeded"
+		if charge.Status == "declined" {
+			eventType = "charge.failed"
+		}
+		a.webhooks.Dispatch(eventType, charge)
 	}
 
 	status := http.StatusOK
