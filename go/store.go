@@ -12,6 +12,7 @@ type Store struct {
 	charges          map[string]*Charge
 	byIdempotencyKey map[string]*Charge
 	ledger           *Ledger
+	eventLog         *EventLog
 }
 
 func NewStore() *Store {
@@ -20,6 +21,16 @@ func NewStore() *Store {
 		byIdempotencyKey: make(map[string]*Charge),
 		ledger:           NewLedger(),
 	}
+}
+
+func NewStoreWithLog(eventLog *EventLog) *Store {
+	s := NewStore()
+	s.eventLog = eventLog
+	return s
+}
+
+func (s *Store) SetEventLog(eventLog *EventLog) {
+	s.eventLog = eventLog
 }
 
 func (s *Store) Ledger() *Ledger {
@@ -48,14 +59,26 @@ func (s *Store) CreateCharge(req CreateChargeRequest) (charge *Charge, created b
 		CreatedAt:      time.Now().UTC(),
 	}
 
+	if s.eventLog != nil {
+		if err := s.eventLog.Append(Event{Type: EventChargeCreated, Charge: charge}); err != nil {
+			return nil, false, fmt.Errorf("writing to event log: %w", err)
+		}
+	}
+
+	s.applyChargeCreated(charge)
+
+	return charge, true, nil
+}
+
+func (s *Store) applyChargeCreated(charge *Charge) {
 	s.mu.Lock()
 	s.charges[charge.ID] = charge
 	s.byIdempotencyKey[charge.IdempotencyKey] = charge
 	s.mu.Unlock()
-	s.ledger.RecordCharge(charge)
 
-	return charge, true, nil
-}
+	s.ledger.RecordCharge(charge)
+  }
+
 
 func (s *Store) GetCharge(id string) (*Charge, bool) {
 	s.mu.RLock()
